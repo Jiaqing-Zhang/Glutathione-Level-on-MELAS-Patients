@@ -1,0 +1,308 @@
+---
+title: "MELAS data cleaning and manipulation"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+library(tidyr)
+library(dplyr)
+library(readxl)
+library(writexl)
+library(gee)
+library(geepack)
+library(stringr)
+```
+
+### Import SHEET1
+```{r, include=FALSE}
+sheet1 <- read_excel("~/Downloads/MELAS_GSH/updated file 12_09 /Metab_Database_Stat_highlight.xlsx")
+sheet1 <- sheet1[complete.cases(sheet1$PtID),]
+sheet1$date <- as.numeric(as.character(as.Date(sheet1$ScanDate, format = "%Y/%m/%d"), format="%Y%m%d"))
+
+##subject 203: remove the first visit and convert the second and the third visit to first and second visit
+sheet1 <- sheet1[sheet1$ID != '55-203IXX', ]
+sheet1[sheet1$PtID==203, 'ID'] <- c('55-203IXX', '2-55-203IXX')
+
+##subject ptid 34 should be 234 (should not be removed)
+sheet1[sheet1$ID=='25-234CX', 'PtID'] = 234
+
+sheet1 <- sheet1 %>% group_by(FamID, PtID) %>% mutate(VisitN=rank(date))
+```
+
+
+### Import SHEET2
+```{r}
+sheet2 <- read_excel("~/Downloads/MELAS_GSH/updated file 12_09 /Metab_Database_Stat_highlight.xlsx", 
+    sheet = "MRS_Proton_SV")
+sheet2 <- sheet2[complete.cases(sheet2$PtID),]
+sheet2$date <- as.numeric(as.character(as.Date(sheet2$ScanDate, format = "%Y/%m/%d"), format="%Y%m%d"))
+
+##subject 203: remove the first visit and convert the second and the third visit to first and second visit
+sheet2 <- sheet2[sheet2$ID != '55-203IXX', ]
+sheet2[sheet2$PtID==203, 'ID'] <- c('55-203IXX', '2-55-203IXX')
+
+##subject ptid 34 should be 234 (should not be removed)
+sheet2[sheet2$ID=='25-234CX', 'PtID'] = 234
+
+sheet2 <- sheet2 %>% group_by(FamID,PtID) %>% mutate(VisitN=rank(date))
+#sheet2 <- sheet2[sheet2$PtID !=34, ]
+```
+
+### Import Allison updated bio record in 2021/01/26
+```{r}
+allison_updated <- read_excel("~/Downloads/MELAS_GSH/updated file 12_09 /Metab_Database_Stat_highlight.xlsx", 
+    sheet = "Allison_update_bio_2")
+allison_updated <- allison_updated[complete.cases(allison_updated$PtID),]
+
+##check the consistency of this table and sheet1
+
+test <- merge(sheet1[, c(1:4)], allison_updated[, c(1:4)], by = 'ID')
+
+sum(test$`GroupID (control=0, carrier=1, melas=2).x`- test$`GroupID (control=0, carrier=1, melas=2).y`)
+sum(test$FamID.x - test$FamID.y)
+sum(test$PtID.x - test$PtID.y)
+
+###all are consistent and we can merge this table with table 1 and table 2 by id
+###for patient 203, not know if this is the right record to use in allison's updated table since we modify the id in the sheet1 and sheet2
+###according to some other bio record, we should remove the first record of 203 and keep the second one as the first visit record
+allison_updated <-allison_updated[allison_updated$ID !='55-203IXX', ]
+
+##change the id of '2-55-203IXX' to '55-203IXX'
+
+allison_updated[allison_updated$PtID==203, 'ID'] <- '55-203IXX'
+```
+
+
+### Import SHEET3/4/5
+```{r}
+###import other sheets
+sheet3 <- read_excel("~/Downloads/MELAS_GSH/updated file 12_09 /Metab_Database_Stat_highlight.xlsx", 
+    sheet = "Neuro-psych")
+sheet3 <- sheet3[complete.cases(sheet3$PtID),]
+#sheet3 <- sheet3[sheet3$PtID !=34, ]
+
+
+sheet4 <- read_excel("~/Downloads/MELAS_GSH/updated file 12_09 /Metab_Database_Stat_highlight.xlsx", 
+    sheet = "PtsDemographics")
+#sheet4 <- sheet4[sheet4$PtID !=34, ]
+
+sheet5 <- read_excel("~/Downloads/MELAS_GSH/updated file 12_09 /Metab_Database_Stat_highlight.xlsx", 
+    sheet = "Symptom Questionnaire")
+###recode the group variable in Symptom question table
+sheet5$`GroupID (control=0, carrier=1, melas=2)` <- 3-sheet5$CohortGrp
+#sheet5 <- sheet5[sheet5$PtID !=34, ]
+```
+
+```{r}
+sheet5$presence_symptoms <- rowSums(sheet5[, 7:39])
+```
+
+
+### check if the id, famid and ptid are consistent in sheet1 and sheet 2
+```{r}
+#############################################sheet1#############################################
+sheet1_famid_split1 <- str_split_fixed(sheet1$ID, pattern = '-', n=3)
+sheet1_famid_split1 <- as.data.frame(cbind(sheet1$ID, sheet1_famid_split1))
+colnames(sheet1_famid_split1) <- c('ID', 'visit_n', 'famid', 'ptid')
+
+##with 2 in front
+sheet1_famid_split2 <- sheet1_famid_split1[sheet1_famid_split1$visit_n==2, ]
+sheet1_famid_split2$visit_n <- as.numeric(sheet1_famid_split2$visit_n)
+#without 2 in front 
+`%not_in%` <- purrr::negate(`%in%`)
+sheet1_famid_split3 <-subset(sheet1_famid_split1, sheet1_famid_split1$ID %not_in% sheet1_famid_split2$ID)
+colnames(sheet1_famid_split3) <- c("ID", "famid", 'ptid', 'visit_n')
+sheet1_famid_split3$visit_n <- 1
+
+sheet1_id_split <- sheet1_famid_split3 %>% union(sheet1_famid_split2)
+sheet1_id_split$ptid <- extract_numeric(sheet1_id_split$ptid)
+sheet1_id_split$famid <- as.numeric(sheet1_id_split$famid)
+sheet1_id_split$ptid <- as.numeric(sheet1_id_split$ptid)
+ 
+
+sheet1_checkid <- sheet1 %>% full_join(sheet1_id_split, by= 'ID')
+
+sum(sheet1_checkid$FamID-sheet1_checkid$famid) ##family_id is consistent
+sheet1_checkid[(sheet1_checkid$PtID - sheet1_checkid$ptid)!=0, ] ##only 24002 and 32102 are inconsistent, but it is expected
+
+sum(sheet1_checkid$VisitN - sheet1_checkid$visit_n) ##visit number is consistent
+
+#############################################sheet2#############################################
+sheet2_famid_split1 <- str_split_fixed(sheet2$ID, pattern = '-', n=3)
+sheet2_famid_split1 <- as.data.frame(cbind(sheet2$ID, sheet2_famid_split1))
+colnames(sheet2_famid_split1) <- c('ID', 'visit_n', 'famid', 'ptid')
+
+##with 2 in front
+sheet2_famid_split2 <- sheet2_famid_split1[sheet2_famid_split1$visit_n==2, ]
+sheet2_famid_split2$visit_n <- as.numeric(sheet2_famid_split2$visit_n)
+#without 2 in front 
+sheet2_famid_split3 <-subset(sheet2_famid_split1, sheet2_famid_split1$ID %not_in% sheet2_famid_split2$ID)
+colnames(sheet2_famid_split3) <- c("ID", "famid", 'ptid', 'visit_n')
+sheet2_famid_split3$visit_n <- 1
+
+sheet2_id_split <- sheet2_famid_split3 %>% union(sheet2_famid_split2)
+sheet2_id_split$ptid <- extract_numeric(sheet2_id_split$ptid)
+sheet2_id_split$famid <- as.numeric(sheet2_id_split$famid)
+sheet2_id_split$ptid <- as.numeric(sheet2_id_split$ptid)
+ 
+
+sheet2_checkid <- sheet2 %>% full_join(sheet2_id_split, by= 'ID')
+
+sum(sheet2_checkid$FamID-sheet2_checkid$famid) ##family_id is consistent
+sheet2_checkid[(sheet2_checkid$PtID - sheet2_checkid$ptid)!=0, ] ##only 24002 and 32102 are inconsistent, but it is expected
+
+sum(sheet2_checkid$VisitN - sheet2_checkid$visit_n) ##visit number is consistent
+```
+
+### correct some id visit_number
+```{r}
+##sub 91: sheet1 and sheet2, visitn=2
+sheet1[sheet1$PtID==91, 'VisitN'] <- 2
+sheet2[sheet2$PtID==91, 'VisitN'] <- 2
+
+##sub 133: sheet1, sheet2 and sheet5, visitn=2
+sheet1[sheet1$PtID==133, 'VisitN'] <- 2
+sheet2[sheet2$PtID==133, 'VisitN'] <- 2
+sheet5[sheet5$PtID==133, 'VisitNum'] <- 2
+
+##sub 226: sheet5 visitnumber should be 1, 2
+sheet5[sheet5$PtID==226, 'VisitNum'] <- c(1, 2)
+
+##sub 254, 255, 265, 284, 24002: sheet1 and sheet2, visitn=2
+sheet1[sheet1$PtID==254, 'VisitN'] <- 2
+sheet2[sheet2$PtID==254, 'VisitN'] <- 2
+
+sheet1[sheet1$PtID==255, 'VisitN'] <- 2
+sheet2[sheet2$PtID==255, 'VisitN'] <- 2
+
+sheet1[sheet1$PtID==265, 'VisitN'] <- 2
+sheet2[sheet2$PtID==265, 'VisitN'] <- 2
+
+sheet1[sheet1$PtID==284, 'VisitN'] <- 2
+sheet2[sheet2$PtID==284, 'VisitN'] <- 2
+
+sheet1[sheet1$PtID==24002, 'VisitN'] <- 2
+sheet2[sheet2$PtID==24002, 'VisitN'] <- 2
+```
+
+### merge sheet1 and sheet2 and allison updated table
+```{r, include=FALSE}
+sheet1$VisitNS1 <- sheet1$VisitN
+dt1_1 <- sheet1 %>% full_join(sheet2, by = c('ID', "PtID", "VisitN", 'FamID')) %>% select(-date.x, -date.y) %>% rename('ScanDate.sheet1'='ScanDate.x', 'ScanDate.sheet2'='ScanDate.y','GroupID (control=0, carrier=1, melas=2).sheet1' = 'GroupID (control=0, carrier=1, melas=2).x', 'GroupID (control=0, carrier=1, melas=2).sheet2' = 'GroupID (control=0, carrier=1, melas=2).y', 'PtCode.sheet1' = 'PtCode.x', 'PtCode.sheet2' = 'PtCode.y')
+
+dt1 <- dt1_1 %>% full_join(allison_updated, by =c('ID', "PtID", 'FamID')) %>% rename('GroupID (control=0, carrier=1, melas=2).allison_update' = 'GroupID (control=0, carrier=1, melas=2)', 'PtCode.allison_update' = 'PtCode')
+
+###there are two subjects with valid information in ventricular lac in sheet1 but not in allison updated one (75-298AC and 77-296KXS)
+
+```
+
+```{r, include=FALSE}
+# ###familiy id 
+# ##the first visit 
+# one_vst <- dt1[dt1$VisitN==1, ]
+# one_vst$ID2 <- one_vst$ID
+# one_vst <- one_vst %>% separate(ID2, c("fid_check", "pid_check"), sep = "[-]|[A-Z]") 
+# 
+# 
+# one_vst[(as.numeric(one_vst$fid_check) - one_vst$FamID)!=0,]  ###subject with ptid 268 does not have identical family id as the ID
+# one_vst[(as.numeric(one_vst$pid_check) - one_vst$PtID)!=0,] ###subject with ptid 239 and ID = 46-293MT 
+# ######update 12/17 checked
+# 
+# ##the second visit 
+# second_vst <- dt1[dt1$VisitN==2, ]
+# second_vst$ID2 <- second_vst$ID %>% str_replace(pattern = '2-', "")
+# second_vst <- second_vst %>% separate(ID2, c("fid_check", "pid_check"), sep = "[-]|[A-Z]") 
+# 
+# 
+# second_vst[(as.numeric(second_vst$fid_check) - second_vst$FamID)!=0,]  ###all subjects are good
+# second_vst[(as.numeric(second_vst$pid_check) - second_vst$PtID)!=0,] ###all subjects are good
+```
+
+### merge with sheet 3
+```{r, include=FALSE}
+sheet3$ExamNumS3 <- sheet3$ExamNum
+dt2 <- dt1 %>% full_join(sheet3, by = c("PtID",  "VisitN" = "ExamNum")) %>% rename('NeuroDate.sheet3'='NeuroDate', 'GroupID (control=0, carrier=1, melas=2).sheet3' = 'GroupID (control=0, carrier=1, melas=2)')
+```
+
+### merge with sheet 5
+```{r, include=FALSE}
+sheet5$VisitNumS5 <- sheet5$VisitNum
+dt3 <- dt2 %>% full_join(sheet5, by = c("PtID", "VisitN" = 'VisitNum')) %>% rename('VisitDates.sheet5'='VisitDate', 'GroupID (control=0, carrier=1, melas=2).sheet5' = 'GroupID (control=0, carrier=1, melas=2)')
+```
+
+### merge with sheet 4
+```{r, include=FALSE}
+dt <- dt3 %>% left_join(sheet4, by = c("PtID"))  %>% rename('FamID.sheet1'='FamID.x', 'FamID.sheet4'='FamID.y', 'PtCode.sheet4'='PtCode', 'GroupID (control=0, carrier=1, melas=2).sheet4' = 'GroupID (control=0, carrier=1, melas=2)') 
+```
+
+
+```{r, include=FALSE}
+dt_id <- dt[, c("PtID" , 'GroupID (control=0, carrier=1, melas=2).sheet1',"GroupID (control=0, carrier=1, melas=2).sheet3","GroupID (control=0, carrier=1, melas=2).sheet4", "GroupID (control=0, carrier=1, melas=2).sheet5", "FamID.sheet1", "FamID.sheet4", "VisitN", "VisitNS1", "ExamNumS3", "VisitNumS5", "ScanDate.sheet1", "ScanDate.sheet2", "NeuroDate.sheet3", "VisitDates.sheet5")]
+
+dt_id$fid_diff <- dt_id$FamID.sheet1-dt_id$FamID.sheet4
+
+dt_id$group_diffs1s3 <- dt_id$`GroupID (control=0, carrier=1, melas=2).sheet1`-dt_id$`GroupID (control=0, carrier=1, melas=2).sheet3`
+dt_id$group_diffs1s4 <- dt_id$`GroupID (control=0, carrier=1, melas=2).sheet1`-dt_id$`GroupID (control=0, carrier=1, melas=2).sheet4`
+dt_id$group_diffs1s5 <- dt_id$`GroupID (control=0, carrier=1, melas=2).sheet1`-dt_id$`GroupID (control=0, carrier=1, melas=2).sheet5`
+dt_id$group_diffs3s4 <- dt_id$`GroupID (control=0, carrier=1, melas=2).sheet3`-dt_id$`GroupID (control=0, carrier=1, melas=2).sheet4`
+dt_id$group_diffs3s5 <- dt_id$`GroupID (control=0, carrier=1, melas=2).sheet3`-dt_id$`GroupID (control=0, carrier=1, melas=2).sheet5`
+dt_id$group_diffs4s5 <- dt_id$`GroupID (control=0, carrier=1, melas=2).sheet4`-dt_id$`GroupID (control=0, carrier=1, melas=2).sheet5`
+
+dt_id$difftimes1s2 <- difftime(dt_id$ScanDate.sheet2, dt_id$ScanDate.sheet1, units = 'days')
+dt_id$difftimes1s3 <- difftime(dt_id$ScanDate.sheet1, dt_id$NeuroDate.sheet3, units = 'days')
+dt_id$difftimes1s5 <- difftime(dt_id$ScanDate.sheet1, dt_id$VisitDates.sheet5, units = 'days')
+dt_id$difftimes3s5 <- difftime(dt_id$NeuroDate.sheet3, dt_id$VisitDates.sheet5, units = 'days')
+
+########################################check group########################################
+dt_grp_susp <- dt_id %>% filter(group_diffs1s3 != 0 | group_diffs1s4 != 0 | group_diffs1s5 != 0 |group_diffs3s4 !=0 | group_diffs3s5 != 0 | group_diffs4s5 !=0) ###no group inconsistency
+
+
+########################################check family id########################################
+dt_fid_susp <- dt_id %>% filter(fid_diff !=0 |is.na(fid_diff)) ###these subjects are either only have one observations in sheet1/2 or do not have observations in sheet1/2
+
+###fid_diff is null bc subject only have one observation in sheet1/2
+sheet1_ptid <- sheet1$PtID
+dt_fid_susp_one_s1s2 <- dt_fid_susp[dt_fid_susp$PtID %in% sheet1_ptid, ] 
+length(unique(dt_fid_susp_one_s1s2$PtID)) ##there are 27 subjects, they do have family id in sheet1/2
+sort(unique(dt_fid_susp_one_s1s2$PtID))
+
+###fid_diff is null bc subject no one observation in sheet1/2
+dt_fid_susp_no_s1s2 <- dt_fid_susp[dt_fid_susp$PtID %not_in% sheet1_ptid, ] 
+length(unique(dt_fid_susp_no_s1s2$PtID)) ##there are 32 subjects do not have information in sheet1/2
+sort(unique(dt_fid_susp_no_s1s2$PtID))
+
+
+########################################check scan/exam date########################################                               
+dt_time_susp <- dt_id %>% filter(abs(difftimes1s2) > 90 |abs(difftimes1s3) > 90 |abs(difftimes1s5) > 90 |abs(difftimes3s5) > 90 ) %>% select(-`GroupID (control=0, carrier=1, melas=2).sheet1`, -`GroupID (control=0, carrier=1, melas=2).sheet3`,-`GroupID (control=0, carrier=1, melas=2).sheet4`,  -`GroupID (control=0, carrier=1, melas=2).sheet5`, -FamID.sheet1, -fid_diff, -group_diffs1s3, -group_diffs1s4, -group_diffs1s5, -group_diffs3s4, -group_diffs3s5, -group_diffs4s5, -difftimes1s2) %>% rename('FamID'='FamID.sheet4')   
+
+```
+
+
+### subjects with only one time point 
+```{r}
+df_one_obs_s1s2_1 <-dt %>% filter(!is.na(VisitNS1)) %>% group_by(PtID) %>% tally() %>% filter(n==1)
+
+df_one_obs_s1s2_overall <- subset(dt, dt$PtID %in% df_one_obs_s1s2_1$PtID)
+
+df_one_obs_s1s2_vnonly <- subset(dt[, c('PtID', 'VisitNS1', 'ExamNumS3','VisitNumS5')], dt$PtID %in% df_one_obs_s1s2_1$PtID)
+
+# write_xlsx(df_one_obs_s1s2_overall, '~/Downloads/MELAS_GSH/updated file 12_09 /only_oneobs_cov.xlsx')
+# write_xlsx(df_one_obs_s1s2_vnonly , '~/Downloads/MELAS_GSH/updated file 12_09 /only_oneobs_vn.xlsx')
+```
+
+### remove subject 204 and 218
+```{r}
+dt_clean <- dt[dt$PtID != 204 &dt$PtID != 218 , ]
+```
+
+### change negative value of meanglob to missing
+```{r}
+dt_clean$MEANGLOB_clean <- ifelse(dt_clean$MEANGLOB<0, NA, dt_clean$MEANGLOB)
+```
+
+

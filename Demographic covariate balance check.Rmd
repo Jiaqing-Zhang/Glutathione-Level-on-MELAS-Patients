@@ -1,0 +1,144 @@
+---
+title: "Demographic balance check"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r, include=FALSE, echo=FALSE}
+library(tidyr)
+library(dplyr)
+library(readxl)
+library(writexl)
+library(gee)
+library(geepack)
+library(stringr)
+library(eeptools)
+```
+
+```{r, echo=FALSE, message=FALSE, include=FALSE}
+dt <- dt1[, c("FamID.sheet4", "PtID", "DOB", "Sex", "GroupID (control=0, carrier=1, melas=2).sheet1", "GroupID (control=0, carrier=1, melas=2).sheet5", "VisitN", "ScanDate.sheet1", "VisitDates.sheet5", 'GSH', "OCC-GSH", 'InternalWater', 'OCC Internal water', 'OCC-CHO', 'OCC-CR', 'OCC-NAA', 'OCC-LAC', "Lac_Vent", 'VentricularLAC', 'Predicted', "Fatigue", 'CNSScore', "presence_symptoms" , 'KarnofskyScore', 'Heteroplasmy', 'MEANGLOB', "MINI", "FOLSTEIN")]
+
+dt$group <- ifelse(is.na(dt$`GroupID (control=0, carrier=1, melas=2).sheet5`), dt$`GroupID (control=0, carrier=1, melas=2).sheet1`, dt$`GroupID (control=0, carrier=1, melas=2).sheet5`)
+
+dt$age <- ifelse(is.na(dt$VisitDates.sheet5), round(difftime(dt$ScanDate.sheet1, dt$DOB, units = 'days')/365, 2), round(difftime(dt$VisitDates.sheet5, dt$DOB, units = 'days')/365, 2)) 
+###for age calculation, visitdate in sheet5 has less missing value, choose visitdate in in calculation; if the visitdate is null then use the scan date (only two person with null visitdate)
+
+####normalized some outcome/predictors
+dt$gsh_normalized <- dt$GSH/dt$InternalWater
+dt$naa_occ_normalized <- dt$`OCC-NAA`/dt$InternalWater
+dt$occ_lac_normalized <- dt$`OCC-LAC`/dt$InternalWater
+dt$occ_cho_normalized <- dt$`OCC-CHO`/dt$InternalWater
+dt$occ_cr_normalized <- dt$`OCC-CR`/dt$InternalWater
+
+
+# dt$vl_occ <- dt$Lac_Vent/dt$`NAA-OCC`
+
+dt <- dt %>% select(-`GroupID (control=0, carrier=1, melas=2).sheet1`,  -`GroupID (control=0, carrier=1, melas=2).sheet5`)
+
+dt$group <- factor(dt$group, levels = 0:2, labels = c('control', 'carrier', 'melas'))
+
+dt$Sex <- as.factor(dt$Sex)
+dt$gender <- ifelse(dt$Sex == 2, 1, 0)
+dt$gender <- factor(dt$gender, levels = 0:1, labels = c('male', 'female'))
+
+dt$VisitN <- as.factor(dt$VisitN)
+
+dt$group_carrier <- relevel(dt$group, ref = 'carrier')
+
+####number of presence of symptoms--> some observations with all missing, some partial missing, how to deal with that
+# test <- dt[, c('PtID', 'DOB', 'ScanDate.sheet1')]
+# test$age <- round(age_calc(dt$DOB, na.omit(dt$ScanDate.sheet1), units = 'years'), 2)
+# test$age2 <- round(difftime(dt$ScanDate.sheet1, dt$DOB, units = 'days')/365, 2)
+```
+
+```{r, echo=FALSE, message=FALSE, include=FALSE}
+dt_t1 <- dt %>% filter(VisitN == 1)
+
+dt_control <- dt_t1 %>% filter(group == 'control')
+
+dt_carrier <- dt_t1 %>% filter(group == 'carrier')
+
+dt_melas <- dt_t1 %>% filter(group == 'melas')
+```
+
+
+# 1. What is the average age of controls, carriers, and MELAS patients?
+```{r, echo=FALSE, message=FALSE}
+des_age <- dt_t1 %>% group_by(group) %>% filter(!is.na(age)) %>% summarise(min=min(age, na.rm = TRUE),
+                                                                           max=max(age, na.rm = TRUE),
+                                                                           mean=mean(age, na.rm = TRUE),
+                                                                           sd=sd(age, na.rm = TRUE), 
+                                                                           n = n())
+
+des_age
+```
+
+## ANOVA results
+```{r, echo=FALSE, message=FALSE}
+library("ggpubr")
+
+ggboxplot(dt_t1, x = "group", y = "age", 
+          color = "group", palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+          ylab = "Age", xlab = "Group")
+
+
+age_aov <- aov(age ~ group, data = dt_t1)
+# Summary of the analysis
+summary(age_aov)
+```
+
+
+## 1a. does age differ by group? (control as reference)
+```{r, echo=FALSE, message=FALSE}
+summary(lm(age ~ group, data = dt_t1))
+```
+
+## 1b. does age differ by group? (carrier as reference)
+```{r, echo=FALSE, message=FALSE}
+summary(lm(age ~ group_carrier, data = dt_t1))
+```
+
+```{r, echo=FALSE, message=FALSE}
+library(car)
+library(pander)
+fit_type3_age <- Anova(lm(age ~ group, data = dt_t1), type =3)
+
+
+pander(fit_type3_age)
+```
+
+
+# 2. How many men and women are in each group?
+```{r, echo=FALSE, message=FALSE}
+des_sex <- dt_t1 %>% group_by(group, gender) %>% filter(!is.na(gender)) %>% summarise(n = n())
+
+des_sex
+```
+
+## Chi-square results
+```{r, echo=FALSE, message=FALSE}
+gender_chisq <- chisq.test(table(dt_t1$gender, dt_t1$group))
+gender_chisq
+```
+
+
+
+## 2a. does gender differ by group? (control as reference)
+```{r, echo=FALSE, message=FALSE}
+summary(glm(dt_t1$gender ~ dt_t1$group, family = binomial(link = 'logit')))
+```
+
+## 2b. does age differ by group? (carrier as reference)
+```{r, echo=FALSE, message=FALSE}
+summary(glm(dt_t1$gender ~ dt_t1$group_carrier, family = binomial(link = 'logit')))
+```
+
+```{r, echo=FALSE, message=FALSE}
+fit_type3_gender <-Anova(glm(dt_t1$gender ~ dt_t1$group, family = binomial(link = 'logit')), type =3, test.statistic= "Wald")
+
+summary(fit_type3_gender)
+
+pander(fit_type3_gender)
+```
+

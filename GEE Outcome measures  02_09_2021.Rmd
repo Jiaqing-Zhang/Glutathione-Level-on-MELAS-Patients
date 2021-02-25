@@ -1,0 +1,232 @@
+---
+title: "Outcome measures-GEE Analysis"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r, include=FALSE, echo=FALSE}
+library(tidyr)
+library(dplyr)
+library(readxl)
+library(writexl)
+library(gee)
+library(geepack)
+library(stringr)
+library(eeptools)
+```
+
+```{r, echo=FALSE, message=FALSE, include=FALSE}
+
+dt <- dt1[, c("FamID.sheet4", "PtID", "DOB", "Sex", "GroupID (control=0, carrier=1, melas=2).sheet1", "GroupID (control=0, carrier=1, melas=2).sheet5", "VisitN", "ScanDate.sheet1", "VisitDates.sheet5", 'GSH', "OCC-GSH", 'InternalWater', 'OCC Internal water', 'OCC-CHO', 'OCC-CR', 'OCC-NAA', 'OCC-LAC', "Lac_Vent", 'VentricularLAC', 'Predicted', "Distance" , "Fatigue", 'CNSScore', "presence_symptoms" , 'KarnofskyScore', 'Heteroplasmy', 'MEANGLOB', 'MEANGLOB_clean', "MINI", "FOLSTEIN")]
+
+dt$group <- ifelse(is.na(dt$`GroupID (control=0, carrier=1, melas=2).sheet5`), dt$`GroupID (control=0, carrier=1, melas=2).sheet1`, dt$`GroupID (control=0, carrier=1, melas=2).sheet5`)
+
+dt$age <- ifelse(is.na(dt$VisitDates.sheet5), round(difftime(dt$ScanDate.sheet1, dt$DOB, units = 'days')/365, 2), round(difftime(dt$VisitDates.sheet5, dt$DOB, units = 'days')/365, 2)) 
+###for age calculation, visitdate in sheet5 has less missing value, choose visitdate in in calculation; if the visitdate is null then use the scan date (only two person with null visitdate)
+
+####normalized some outcome/predictors
+dt$gsh_normalized <- dt$GSH/dt$InternalWater
+dt$naa_occ_normalized <- dt$`OCC-NAA`/dt$InternalWater
+dt$occ_lac_normalized <- dt$`OCC-LAC`/dt$InternalWater
+dt$occ_cho_normalized <- dt$`OCC-CHO`/dt$InternalWater
+dt$occ_cr_normalized <- dt$`OCC-CR`/dt$InternalWater
+
+
+# dt$vl_occ <- dt$Lac_Vent/dt$`NAA-OCC`
+
+dt <- dt %>% select(-`GroupID (control=0, carrier=1, melas=2).sheet1`,  -`GroupID (control=0, carrier=1, melas=2).sheet5`)
+
+dt$group <- factor(dt$group, levels = 0:2, labels = c('control', 'carrier', 'melas'))
+
+dt$Sex <- as.factor(dt$Sex)
+dt$Sex <- factor(dt$Sex, levels = 1:2, labels = c('male', 'female'))
+
+dt$VisitN <- as.factor(dt$VisitN)
+
+dt$group_carrier <- relevel(dt$group, ref = 'carrier')
+
+####number of presence of symptoms--> some observations with all missing, some partial missing, how to deal with that
+# test <- dt[, c('PtID', 'DOB', 'ScanDate.sheet1')]
+# test$age <- round(age_calc(dt$DOB, na.omit(dt$ScanDate.sheet1), units = 'years'), 2)
+# test$age2 <- round(difftime(dt$ScanDate.sheet1, dt$DOB, units = 'days')/365, 2)
+```
+
+```{r, echo=FALSE, message=FALSE, include=FALSE}
+dt_t1 <- dt %>% filter(VisitN == 1)
+```
+
+```{r, echo=FALSE, message=FALSE, include=FALSE}
+report <- function(x){
+  out <- matrix( , length(x$coefficients[, 1]), 4)
+  for (i in 1:length(x$coefficients[, 1])){
+    out[, 1] <- x$coefficients[, 1]
+    out[, 2] <- x$coefficients[, 4]
+    out[, 3] <- x$coefficients[, 5]
+    out[, 4] <- round(2*pnorm(-abs(x$coefficients[, 5])), 4)
+  }
+  colnames(out) <- c('Estimate', 'Robust S.E.', 'Robust z', 'P')
+  rownames(out) <- dimnames(x$coefficients)[[1]]
+  return(out) 
+}
+```
+
+
+# 1. CNS Score (“CNSScore”)
+## 1a. What is the average CNS score in controls, carriers, and MELAS patients at baseline visit? 
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+des_cns <- dt_t1 %>% group_by(group) %>% filter(!is.na(CNSScore)) %>% summarise(min=min(CNSScore, na.rm = TRUE),
+                                                                                max=max(CNSScore, na.rm = TRUE),
+                                                                                mean=mean(CNSScore, na.rm = TRUE),
+                                                                                sd=sd(CNSScore, na.rm = TRUE), 
+                                                                                n = n())
+
+des_cns
+```
+
+## 1b1. Are differences significant? (control as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+cns_gr_overall <- summary(gee(CNSScore ~ group + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(cns_gr_overall)
+```
+
+## 1b2. Are differences significant? (carrier as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+cns_gr_overall_car <- summary(gee(CNSScore ~ group_carrier + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(cns_gr_overall_car)
+```
+
+## 1c. Is there a significant correlation between baseline GSH score/internal water and CNS score (looking at all 3 groups together)?
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+gsh_CNSScore <- summary(gee(CNSScore ~ gsh_normalized + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+
+report(gsh_CNSScore)
+```
+
+
+# 2. Karnofsky Score (“Karnofsky”)
+## 2a. What is the average Karnofsky score in controls, carriers, and MELAS patients at baseline visit? 
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+des_ks <- dt_t1 %>% group_by(group) %>% filter(!is.na(KarnofskyScore)) %>% summarise(min=min(KarnofskyScore, na.rm = TRUE),
+                                                                                      max=max(KarnofskyScore, na.rm = TRUE),
+                                                                                      mean=mean(KarnofskyScore, na.rm = TRUE),
+                                                                                      sd=sd(KarnofskyScore, na.rm = TRUE), 
+                                                                                      n = n())
+
+des_ks
+```
+
+## 2b1. Are differences significant? (control as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+ks_gr_overall <- summary(gee(KarnofskyScore ~ group + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(ks_gr_overall)
+```
+
+## 2b2. Are differences significant? (carrier as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+ks_gr_overall_car <- summary(gee(KarnofskyScore ~ group_carrier + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(ks_gr_overall_car)
+```
+
+## 2c. Is there a significant correlation between baseline GSH score/internal water and Karnofsky score (looking at all 3 groups together)?
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+gsh_KScore <- summary(gee(KarnofskyScore ~ gsh_normalized + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+
+report(gsh_KScore)
+```
+
+
+# 3. Mean Global Score (“MEANGLOB”)
+## 3a. What is the average Mean Global score in controls, carriers, and MELAS patients at baseline visit? 
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+des_mg <- dt_t1 %>% group_by(group) %>% filter(!is.na(MEANGLOB_clean)) %>% summarise(min=min(MEANGLOB_clean, na.rm = TRUE),
+                                                                               max=max(MEANGLOB_clean, na.rm = TRUE),
+                                                                               mean=mean(MEANGLOB_clean, na.rm = TRUE),
+                                                                               sd=sd(MEANGLOB_clean, na.rm = TRUE), 
+                                                                               n = n())
+
+des_mg
+```
+
+## 3b1. Are differences significant? (control as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+mg_gr_overall <- summary(gee(MEANGLOB_clean ~ group + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(mg_gr_overall)
+```
+
+## 3b2. Are differences significant? (carrier as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+mg_gr_overall_car <- summary(gee(MEANGLOB_clean ~ group_carrier + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(mg_gr_overall_car)
+```
+
+## 3c. Is there a significant correlation between baseline GSH score/internal water and Mean Global score (looking at all 3 groups together)?
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+gsh_mgScore <- summary(gee(MEANGLOB_clean ~ gsh_normalized + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+
+report(gsh_mgScore)
+```
+
+
+# 4. 6MWT (“Distance”)
+## 4a. What is the average distance walked in controls, carriers, and MELAS patients at baseline visit? 
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+des_6mwt <- dt_t1 %>% group_by(group) %>% filter(!is.na(Distance)) %>% summarise(min=min(Distance, na.rm = TRUE),
+                                                                                  max=max(Distance, na.rm = TRUE),
+                                                                                  mean=mean(Distance, na.rm = TRUE),
+                                                                                  sd=sd(Distance, na.rm = TRUE), 
+                                                                                  n = n())
+
+des_6mwt
+```
+
+## 4b1. Are differences significant? (Control as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+mwt_gr_overall <- summary(gee(Distance ~ group + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(mwt_gr_overall)
+```
+
+## 4b2. Are differences significant? (Carrier as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+mwt_gr_overall_car <- summary(gee(Distance ~ group_carrier + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(mwt_gr_overall_car)
+```
+
+## 4c. Is there a significant correlation between baseline GSH score/internal water and distance walked (looking at all 3 groups together)?
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+gsh_6mwt <- summary(gee(Distance ~ gsh_normalized + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+
+report(gsh_6mwt)
+```
+
+
+# 5. Presence of symptoms (Symptom Questionnaire, column G – column AM)
+## 5a. What is the average number of symptoms reported as present (“1”) in controls, carriers, and MELAS patients at baseline visit? 
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+des_symp <- dt_t1 %>% group_by(group) %>% filter(!is.na(presence_symptoms)) %>% summarise(min=min(presence_symptoms, na.rm = TRUE),
+                                                                                          max=max(presence_symptoms, na.rm = TRUE),
+                                                                                          mean=mean(presence_symptoms, na.rm = TRUE),
+                                                                                          sd=sd(presence_symptoms, na.rm = TRUE), 
+                                                                                          n = n())
+
+des_symp
+```
+
+## 5b1. Are differences significant? (control as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+symp_gr_overall <- summary(gee(presence_symptoms ~ group + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(symp_gr_overall)
+```
+
+## 5b2. Are differences significant? (carrier as reference)
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+symp_gr_overall_car <- summary(gee(presence_symptoms ~ group_carrier + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+report(symp_gr_overall_car)
+```
+
+## 5c. Is there a significant correlation between baseline GSH score/internal water and the number of symptoms reported (looking at all 3 groups together)?
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+gsh_symp <- summary(gee(presence_symptoms ~ gsh_normalized + age + Sex, family = gaussian, id=FamID.sheet4, data=dt_t1, corstr="independence"))
+
+report(gsh_symp)
+```
