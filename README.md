@@ -1,7 +1,7 @@
 # Glutathione-Level-on-MELAS-Patients
 
 ## Data
-* 288 Subjects from Two Time Points
+* 320 Subjects from Two Time Points
   * Cleaning: Missing data, inconsistent visit date, discrepancy of group
   * Engineer Features
 * Occipital-Related Meaures Derived from MRI
